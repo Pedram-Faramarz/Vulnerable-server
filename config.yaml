@@ -1,0 +1,6 @@
+database:
+    username: lab_user
+    password: P@sswo0rd-in-repo
+external_api:
+    api_key = EXTERNAL-API-KEY-98765
+    
