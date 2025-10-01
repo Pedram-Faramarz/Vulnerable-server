@@ -1,0 +1,7 @@
+# .gitignore
+.env
+config.yaml
+__pycache__/
+venv/
+*.pyc
+payload.bin

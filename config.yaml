@@ -1,6 +1,5 @@
 database:
-    username: lab_user
-    password: P@sswo0rd-in-repo
+  username: lab_user
+  password: "<set via env>"
 external_api:
-    api_key = EXTERNAL-API-KEY-98765
-    
+  api_key: "<set via env>"

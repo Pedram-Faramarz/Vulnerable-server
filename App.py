@@ -1,51 +1,82 @@
 # app. py (vulnerable)
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, current_app
 import yaml
-import pickle
+import json
 import os
+import logging
+
 
 app = Flask(__name__)
 
+# Load configuration from environment and template
+ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", None)
 
-# Hardcoded secret key (vulnerable)
-ADMIN_API_KEY = "SUPER-SECRET-ADMIN-API-KEY-12345"
+# Try to read a non-secret template config (if present). Secrets should come from env.
+cfg = {}
+if os.path.exists("config.template.yaml"):
+    with open("config.template.yaml", "r") as f:
+        cfg = yaml.safe_load(f) or {}
 
-# Load configuration file with secrets (vulnerable if committed)
-
-with open("config.yaml", "r") as f:
-    cfg = yaml.safe_load(f)
 
 @app.route("/")
 def index():
     return "Lab 4 - vulnerable server"
 
-# Endpoint that demonstrates interanl error Exposure
+
 
 @app.route("/cause-error")
 def cause_error():
-    # raise an exception deliberately (unhandled)
-    1 / 0 # ZeroDivisionError -> Flask will return a full stack trace in debug mode or default
+    # Raise an exception deliberately (handled and logged)
+    try:
+        1 / 0
+    except Exception as e:
+        # Log full exception server-side (not returned to client)
+        current_app.logger.exception("Internal error in /cause-error")
+        return jsonify({"error": "internal server error"}), 500
     return "won't reach"
 
-# Endpoint that uses the hardcoded secret key
+
 @app.route("/admin")
 def admin():
-    key = request.args.get("key","")
+    key = request.args.get("key", "")
+    # Don't reveal the expected key; only check presence/validity
+    if ADMIN_API_KEY is None:
+        current_app.logger.warning("ADMIN_API_KEY not set in environment")
+        return jsonify({"error": "server not configured"}), 500
     if key != ADMIN_API_KEY:
-        # return internal message that discloses info
-        return jsonify({"error": "Invalid API key", "expected_key": ADMIN_API_KEY}), 401
-    return jsonify({"status": "ok", "cfg": cfg})
+        return jsonify({"error": "invalid key"}), 401
+    # Return limited configuration (no secrets)
+    safe_cfg = {k: ("<redacted>" if isinstance(v, dict) else v) for k, v in (cfg.items() if isinstance(cfg, dict) else [])}
+    return jsonify({"status": "ok", "cfg": safe_cfg})
 
 
-#unsafe deserialization endpoint
+
 @app.route("/deserialize", methods=["POST"])
 def deserialize():
-    # Accept raw bytes and unpickle them directly (vulnerable : arbitrary code execution)
-    data = request.data
-    obj = pickle.loads(data)
-    return jsonify({"received" : str(type(obj)), "repr": repr(obj)})
+    """
+    Accept only JSON payloads describing allowed data.
+    We intentionally reject binary pickle input.
+    Expected content-type: application/json
+    Example valid body: {"type": "message", "value": "hello"}
+    """
+    if not request.is_json:
+        return jsonify({"error": "only application/json accepted"}), 415
+    payload = request.get_json()
+    # Basic validation: allow only simple "message" objects
+    if not isinstance(payload, dict):
+        return jsonify({"error": "invalid payload"}), 400
+    allowed_types = {"message"}
+    t = payload.get("type")
+    if t not in allowed_types:
+       return jsonify({"error": "unsupported type"}), 400
+    # Process safe "message" object
+    if t == "message":
+        value = payload.get("value", "")
+        return jsonify({"received_type": "message", "value": str(value)})
+    return jsonify({"error": "bad request"}), 400
 
 if __name__ == "__main__":
-    # Warrning: debug true will show stack traces - intentionaly vulnerable
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Production-like defaults (do not enable debug)
+    logging.basicConfig(level=logging.INFO)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
